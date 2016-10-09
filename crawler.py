@@ -25,10 +25,10 @@ def get_game_ids():
     return game_ids
 
 def get_ratings(game_id, ratings):
+    num_ratings = 0
     page = 1
     response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
     soup = BeautifulSoup(response.content, 'lxml')
-    num_ratings = 0
     total_ratings = int(soup.find('comments').get('totalitems'))
     while True:
         #print(page)
@@ -41,6 +41,7 @@ def get_ratings(game_id, ratings):
         page += 1
         response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&page={}&pagesize=100'.format(game_id, page))
         soup = BeautifulSoup(response.content, 'lxml')
+        total_ratings = int(soup.find('comments').get('totalitems'))
     return ratings
 
 def serialize(filename, ratings):
