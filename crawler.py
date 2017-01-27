@@ -1,39 +1,56 @@
 import re
 import time
-import struct
+import json
+import sys
 
 from bs4 import BeautifulSoup
 import requests
 
 
-def get_game_ids():
+def get_game_ids(last_downloaded):
     game_ids = []
     game_id_regex = re.compile(r'boardgame/([0-9]+)')
     response = requests.get('http://boardgamegeek.com/sitemapindex')
     soup_index = BeautifulSoup(response.content, 'lxml')
     for sitemap_loc in soup_index.find_all('loc'):
         sitemap_url = sitemap_loc.string.strip()
-        print(sitemap_url)
         if not sitemap_url.find('geekitems_boardgame_') == -1:
+            print(sitemap_url)
             response = requests.get(sitemap_url)
             soup_geekitems = BeautifulSoup(response.content, 'lxml')
             for game_loc in soup_geekitems.find_all('loc'):
                 game_url = game_loc.string.strip()
-                print('***', game_url)
                 game_id = int(game_id_regex.search(game_url).group(1))
-                game_ids.append(game_id)
-    return game_ids
+                if game_id > last_downloaded:
+                    game_ids.append(game_id)
+    return sorted(game_ids)
 
-def get_ratings(game_id, ratings):
-    num_ratings = 0
+def get_info(game_id):
+    info = {}
+    response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
+    soup = BeautifulSoup(response.content, 'lxml')
+    info['name'] = soup.find('name').get('value')
+    info['year'] = int(soup.find('yearpublished').get('value'))
+    return info
+
+def get_ratings(game_id, users):
+    ratings = {}
+    num_ratings = 0 # needed to count duplicate ratings
     page = 1
     response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
     soup = BeautifulSoup(response.content, 'lxml')
     total_ratings = int(soup.find('comments').get('totalitems'))
     while True:
-        #print(page)
+        print('  Page', page)
         for rating in soup.find_all('comment'):
-            ratings.setdefault(rating.get('username'), set()).add((game_id, rating.get('rating')))
+            username = rating.get('username')
+            value = float(rating.get('rating'))
+            if not username in users:
+                if users:
+                    users[username] = max(users.values()) + 1
+                else:
+                    users[username] = 1
+            ratings[str(users[username])] = value
             num_ratings += 1
         if num_ratings == total_ratings:
             break
@@ -44,22 +61,34 @@ def get_ratings(game_id, ratings):
         total_ratings = int(soup.find('comments').get('totalitems'))
     return ratings
 
-def serialize(filename, ratings):
-    bin_file = open(filename, 'wb')
-    for user, games in ratings.items():
-        user_bytes = user.encode('utf8')
-        bin_file.write(struct.pack('i', len(user_bytes)))
-        bin_file.write(user_bytes)
-        bin_file.write(struct.pack('i', len(games)))
-        for game, rating in games:
-            bin_file.write(struct.pack('i', game, rating))
-        
 
-
-game_ids = get_game_ids()
-ratings = {}
+with open('games.json', 'r') as games_file:
+    games = json.load(games_file)
+with open('users.json', 'r') as users_file:
+    users = json.load(users_file)
+with open('ratings.json', 'r') as ratings_file:
+    ratings = json.load(ratings_file)
+if len(sys.argv) > 1:
+    last_downloaded = int(sys.argv[1])
+elif games:
+    last_downloaded = int(max(games.keys()))
+else:
+    last_downloaded = 0
+game_ids = get_game_ids(last_downloaded)
+print('Found', len(game_ids), 'missing games.')
 for game_id in game_ids:
-    print(game_id, game_ids[-1])
-    ratings = get_ratings(game_id, ratings)
-serialize('ratings.bin', ratings)
-
+    print('Processing game {}...'.format(game_id))
+    try:
+        game_info = get_info(game_id)
+        game_ratings = get_ratings(game_id, users)
+        print(len(game_ratings), 'ratings found')
+        games[str(game_id)] = game_info
+        ratings[str(game_id)] = game_ratings
+    except:
+        with open('games.json', 'w') as games_file:
+            json.dump(games, games_file)
+        with open('users.json', 'w') as users_file:
+            json.dump(users, users_file)
+        with open('ratings.json', 'w') as ratings_file:
+            json.dump(ratings, ratings_file)
+        raise
