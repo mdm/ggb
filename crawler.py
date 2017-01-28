@@ -116,3 +116,4 @@ for game_id in game_ids:
         with open('ratings.json', 'w') as ratings_file:
             json.dump(ratings, ratings_file)
         raise
+
