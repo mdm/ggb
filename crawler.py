@@ -10,7 +10,7 @@ def get_page_with_retries(url):
     backoff_secs = 2
     while True:
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout = 10)
             if response.status_code == requests.codes.ok:
                 return response.content
             else:
