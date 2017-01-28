@@ -6,18 +6,39 @@ import sys
 from bs4 import BeautifulSoup
 import requests
 
+def get_page_with_retries(url):
+    backoff_secs = 2
+    while True:
+        try:
+            response = requests.get(url)
+            if response.status_code == requests.codes.ok:
+                return response.content
+            else:
+                print('Received a status code', response.status_code)
+                if backoff_secs > 1024:
+                    response.raise_for_status()
+        except KeyboardInterrupt:
+            raise
+        except:
+            if backoff_secs > 1024:
+                raise
+        print('Backing off for', backoff_secs, 'seconds')
+        time.sleep(backoff_secs)
+        backoff_secs *= 2
+
+
 
 def get_game_ids(last_downloaded):
     game_ids = []
     game_id_regex = re.compile(r'boardgame/([0-9]+)')
-    response = requests.get('http://boardgamegeek.com/sitemapindex')
-    soup_index = BeautifulSoup(response.content, 'lxml')
+    response = get_page_with_retries('http://boardgamegeek.com/sitemapindex')
+    soup_index = BeautifulSoup(response, 'lxml')
     for sitemap_loc in soup_index.find_all('loc'):
         sitemap_url = sitemap_loc.string.strip()
         if not sitemap_url.find('geekitems_boardgame_') == -1:
             print(sitemap_url)
-            response = requests.get(sitemap_url)
-            soup_geekitems = BeautifulSoup(response.content, 'lxml')
+            response = get_page_with_retries(sitemap_url)
+            soup_geekitems = BeautifulSoup(response, 'lxml')
             for game_loc in soup_geekitems.find_all('loc'):
                 game_url = game_loc.string.strip()
                 game_id = int(game_id_regex.search(game_url).group(1))
@@ -27,9 +48,12 @@ def get_game_ids(last_downloaded):
 
 def get_info(game_id):
     info = {}
-    response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
-    soup = BeautifulSoup(response.content, 'lxml')
-    info['name'] = soup.find('name').get('value')
+    response = get_page_with_retries('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
+    soup = BeautifulSoup(response, 'lxml')
+    for name in soup.find_all('name'):
+        if name.get('type') == 'primary':
+            info['name'] = name.get('value')
+            break
     info['year'] = int(soup.find('yearpublished').get('value'))
     return info
 
@@ -37,8 +61,8 @@ def get_ratings(game_id, users):
     ratings = {}
     num_ratings = 0 # needed to count duplicate ratings
     page = 1
-    response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
-    soup = BeautifulSoup(response.content, 'lxml')
+    response = get_page_with_retries('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&pagesize=100'.format(game_id))
+    soup = BeautifulSoup(response, 'lxml')
     total_ratings = int(soup.find('comments').get('totalitems'))
     while True:
         print('  Page', page)
@@ -56,8 +80,8 @@ def get_ratings(game_id, users):
             break
         time.sleep(2)
         page += 1
-        response = requests.get('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&page={}&pagesize=100'.format(game_id, page))
-        soup = BeautifulSoup(response.content, 'lxml')
+        response = get_page_with_retries('http://boardgamegeek.com/xmlapi2/thing?id={}&ratingcomments=1&page={}&pagesize=100'.format(game_id, page))
+        soup = BeautifulSoup(response, 'lxml')
         total_ratings = int(soup.find('comments').get('totalitems'))
     return ratings
 
@@ -71,7 +95,7 @@ with open('ratings.json', 'r') as ratings_file:
 if len(sys.argv) > 1:
     last_downloaded = int(sys.argv[1])
 elif games:
-    last_downloaded = int(max(games.keys()))
+    last_downloaded = max([int(k) for k in games.keys()])
 else:
     last_downloaded = 0
 game_ids = get_game_ids(last_downloaded)
